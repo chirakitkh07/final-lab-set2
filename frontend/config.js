@@ -3,3 +3,4 @@ window.APP_CONFIG = {
   TASK_URL: 'https://task-service-production-594b.up.railway.app',
   ACTIVITY_URL: 'https://activity-service-production-a950.up.railway.app'
 };
+

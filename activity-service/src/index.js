@@ -1,9 +1,9 @@
 require('dotenv').config();
 const express = require('express');
-const cors    = require('cors');
+const cors = require('cors');
 const { Pool } = require('pg');
 
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 3003;
 
 app.use(cors());
@@ -11,16 +11,16 @@ app.use(express.json());
 
 const poolConfig = process.env.DATABASE_URL
   ? {
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_URL.includes('railway.app') ? { rejectUnauthorized: false } : false,
-    }
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL.includes('railway.app') ? { rejectUnauthorized: false } : false,
+  }
   : {
-      host: process.env.DB_HOST || 'localhost',
-      port: parseInt(process.env.DB_PORT) || 5432,
-      database: process.env.DB_NAME || 'activitydb',
-      user: process.env.DB_USER || 'admin',
-      password: process.env.DB_PASSWORD || 'secret123',
-    };
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT) || 5432,
+    database: process.env.DB_NAME || 'activitydb',
+    user: process.env.DB_USER || 'admin',
+    password: process.env.DB_PASSWORD || 'secret123',
+  };
 
 const pool = new Pool(poolConfig);
 
@@ -53,7 +53,7 @@ function requireAdmin(req, res, next) {
 // ══════════════════════════════════════════════════════════════════════
 app.post('/api/activity/internal', async (req, res) => {
   const { user_id, username, event_type, entity_type,
-          entity_id, summary, meta } = req.body;
+    entity_id, summary, meta } = req.body;
 
   if (!user_id || !event_type)
     return res.status(400).json({ error: 'user_id and event_type are required' });
@@ -64,8 +64,8 @@ app.post('/api/activity/internal', async (req, res) => {
          (user_id, username, event_type, entity_type, entity_id, summary, meta)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [user_id, username || null, event_type,
-       entity_type || null, entity_id || null,
-       summary || null, meta ? JSON.stringify(meta) : null]
+        entity_type || null, entity_id || null,
+        summary || null, meta ? JSON.stringify(meta) : null]
     );
     res.status(201).json({ ok: true });
   } catch (err) {
@@ -82,8 +82,8 @@ app.get('/api/activity/me', requireAuth, async (req, res) => {
   const { event_type, limit = 50, offset = 0 } = req.query;
 
   const conditions = ['user_id = $1'];
-  const values     = [req.user.sub];
-  let   idx = 2;
+  const values = [req.user.sub];
+  let idx = 2;
 
   if (event_type) { conditions.push(`event_type = $${idx++}`); values.push(event_type); }
 
@@ -116,11 +116,11 @@ app.get('/api/activity/all', requireAdmin, async (req, res) => {
   const { event_type, username, limit = 100, offset = 0 } = req.query;
 
   const conditions = [];
-  const values     = [];
-  let   idx = 1;
+  const values = [];
+  let idx = 1;
 
   if (event_type) { conditions.push(`event_type = $${idx++}`); values.push(event_type); }
-  if (username)   { conditions.push(`username = $${idx++}`);   values.push(username); }
+  if (username) { conditions.push(`username = $${idx++}`); values.push(username); }
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
@@ -149,38 +149,56 @@ app.get('/api/activity/health', (_, res) =>
 );
 
 // ── Start ──────────────────────────────────────────────────────────────
+// ── Start ──────────────────────────────────────────────────────────────
 async function start() {
   let retries = 10;
   while (retries > 0) {
     try {
+      // 1. ตรวจสอบการเชื่อมต่อ
       await pool.query('SELECT 1');
-      // Fallback: สร้าง table ถ้ายังไม่มี (สำหรับ Railway ที่ init.sql อาจไม่รันอัตโนมัติ)
-      await pool.query(`
+      console.log('✅ [activity-db] Connected successfully.');
+
+      // 2. Fallback: สร้าง Table และ Index (ถ้ายังไม่มี)
+      // ใช้ Schema เดียวกับที่คุณออกแบบไว้
+      const initSql = `
         CREATE TABLE IF NOT EXISTS activities (
-          id SERIAL PRIMARY KEY,
-          user_id INTEGER NOT NULL,
-          username VARCHAR(50),
-          event_type VARCHAR(50) NOT NULL,
+          id          SERIAL       PRIMARY KEY,
+          user_id     INTEGER      NOT NULL,
+          username    VARCHAR(50),
+          event_type  VARCHAR(50)  NOT NULL,
           entity_type VARCHAR(20),
-          entity_id INTEGER,
-          summary TEXT,
-          meta JSONB,
-          created_at TIMESTAMP DEFAULT NOW()
+          entity_id   INTEGER,
+          summary     TEXT,
+          meta        JSONB,
+          created_at  TIMESTAMP    DEFAULT NOW()
         );
-        CREATE INDEX IF NOT EXISTS idx_act_user
-          ON activities(user_id);
-        CREATE INDEX IF NOT EXISTS idx_act_event
-          ON activities(event_type);
-        CREATE INDEX IF NOT EXISTS idx_act_time
-          ON activities(created_at DESC);
-      `);
-      break;
+
+        CREATE INDEX IF NOT EXISTS idx_activities_user_id    ON activities(user_id);
+        CREATE INDEX IF NOT EXISTS idx_activities_event_type ON activities(event_type);
+        CREATE INDEX IF NOT EXISTS idx_activities_created_at ON activities(created_at DESC);
+      `;
+
+      await pool.query(initSql);
+      console.log('✅ [activity-db] Tables and Indexes are ready.');
+
+      break; // เชื่อมต่อและสร้าง Table สำเร็จ ให้หลุดจาก loop
     } catch (e) {
-      console.log(`[activity] Waiting DB... (${retries} left)`);
+      console.error(`❌ [activity] DB Connection failed: ${e.message}`);
       retries--;
-      await new Promise(r => setTimeout(r, 3000));
+      console.log(`[activity] Retrying in 5 seconds... (${retries} retries left)`);
+
+      if (retries === 0) {
+        console.error('💥 [activity] Could not connect to DB after multiple retries. Exiting...');
+        process.exit(1);
+      }
+
+      await new Promise(r => setTimeout(r, 5000)); // รอ 5 วินาทีก่อนลองใหม่
     }
   }
-  app.listen(PORT, () => console.log(`[activity-service] Running on :${PORT}`));
+
+  app.listen(PORT, () => {
+    console.log(`🚀 [activity-service] Server is running on port ${PORT}`);
+  });
 }
+
 start();
